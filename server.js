@@ -46,7 +46,15 @@ setInterval(() => {
 }, 5 * 60 * 1000);
 
 io.on('connection', (socket) => {
-  console.log('Nouveau client connecté:', socket.id);
+  console.log('Nouveau client connecté:', socket.id, 'Transport:', socket.conn.transport.name);
+  
+  socket.on('disconnect', (reason) => {
+    console.log('Client déconnecté:', socket.id, 'Raison:', reason);
+  });
+  
+  socket.on('error', (err) => {
+    console.error('Erreur socket:', socket.id, err);
+  });
 
   // Créer une salle
   socket.on('createRoom', ({ playerName }) => {
