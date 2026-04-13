@@ -71,7 +71,9 @@ async function deleteRoom(roomId) {
 // Fonctions helper pour Redis - Utilisateurs
 async function getUser(username) {
   const user = await redis.hgetall(`${USER_PREFIX}${username.toLowerCase()}`);
-  return Object.keys(user).length > 0 ? user : null;
+  if (!user || typeof user !== 'object') return null;
+  const keys = Object.keys(user);
+  return keys.length > 0 ? user : null;
 }
 
 async function createUser(username, passwordHash) {
