@@ -3,6 +3,7 @@ const http = require('http');
 const { Server } = require('socket.io');
 const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
+const { Redis } = require('@upstash/redis');
 
 const app = express();
 
@@ -31,19 +32,30 @@ const io = new Server(server, {
   pingInterval: 10000
 });
 
-// Stockage des salles en mémoire
-const rooms = new Map();
+// Redis client pour stocker les salles (persistance)
+const redis = new Redis({
+  url: process.env.UPSTASH_REDIS_REST_URL,
+  token: process.env.UPSTASH_REDIS_REST_TOKEN,
+});
 
-// Nettoyer les salles inactives (plus de 30 min)
-setInterval(() => {
-  const now = Date.now();
-  for (const [roomId, room] of rooms.entries()) {
-    if (now - room.createdAt > 30 * 60 * 1000) {
-      rooms.delete(roomId);
-      console.log(`Salle ${roomId} supprimée (inactif)`);
-    }
-  }
-}, 5 * 60 * 1000);
+const ROOM_PREFIX = 'room:';
+const ROOM_TTL = 60 * 60; // 1 heure
+
+// Fonctions helper pour Redis
+async function getRoom(roomId) {
+  const room = await redis.get(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
+  return room ? JSON.parse(room) : null;
+}
+
+async function setRoom(roomId, room) {
+  await redis.set(`${ROOM_PREFIX}${roomId.toUpperCase()}`, JSON.stringify(room), { ex: ROOM_TTL });
+}
+
+async function deleteRoom(roomId) {
+  await redis.del(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
+}
+
+// Nettoyer les salles inactives (Redis gère le TTL automatiquement)
 
 io.on('connection', (socket) => {
   console.log('Nouveau client connecté:', socket.id, 'Transport:', socket.conn.transport.name);
@@ -57,10 +69,10 @@ io.on('connection', (socket) => {
   });
 
   // Créer une salle
-  socket.on('createRoom', ({ playerName }) => {
+  socket.on('createRoom', async ({ playerName }) => {
     const roomId = uuidv4().substr(0, 8).toUpperCase();
     
-    rooms.set(roomId, {
+    const room = {
       id: roomId,
       host: socket.id,
       players: [{
@@ -71,7 +83,9 @@ io.on('connection', (socket) => {
       }],
       gameState: null,
       createdAt: Date.now()
-    });
+    };
+    
+    await setRoom(roomId, room);
     
     socket.join(roomId);
     socket.emit('roomCreated', { roomId, isHost: true, playerName: playerName || 'Joueur 1' });
@@ -79,8 +93,8 @@ io.on('connection', (socket) => {
   });
 
   // Rejoindre une salle
-  socket.on('joinRoom', ({ roomId, playerName }) => {
-    const room = rooms.get(roomId.toUpperCase());
+  socket.on('joinRoom', async ({ roomId, playerName }) => {
+    const room = await getRoom(roomId);
     
     if (!room) {
       socket.emit('error', { message: 'Salle non trouvée' });
@@ -98,6 +112,9 @@ io.on('connection', (socket) => {
       ready: false,
       name: playerName || 'Joueur 2'
     });
+    
+    // Sauvegarder la salle mise à jour
+    await setRoom(roomId, room);
     
     const joiningPlayer = room.players.find(p => p.id === socket.id);
     
@@ -130,14 +147,17 @@ io.on('connection', (socket) => {
   });
 
   // Définir prêt
-  socket.on('setReady', ({ roomId, ready }) => {
-    const room = rooms.get(roomId.toUpperCase());
+  socket.on('setReady', async ({ roomId, ready }) => {
+    const room = await getRoom(roomId);
     if (!room) return;
     
     const player = room.players.find(p => p.id === socket.id);
     if (player) {
       player.ready = ready;
     }
+    
+    // Sauvegarder
+    await setRoom(roomId, room);
     
     const allReady = room.players.every(p => p.ready);
     if (allReady && room.players.length === 2) {
@@ -148,11 +168,12 @@ io.on('connection', (socket) => {
   });
 
   // Mettre à jour l'état du jeu
-  socket.on('updateGameState', ({ roomId, gameState }) => {
-    const room = rooms.get(roomId.toUpperCase());
+  socket.on('updateGameState', async ({ roomId, gameState }) => {
+    const room = await getRoom(roomId);
     if (!room) return;
     
     room.gameState = gameState;
+    await setRoom(roomId, room);
     socket.to(roomId).emit('gameStateUpdated', gameState);
   });
 
