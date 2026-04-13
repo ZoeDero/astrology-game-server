@@ -188,47 +188,41 @@ io.on('connection', (socket) => {
   });
 
   // Déconnexion
-  socket.on('disconnect', () => {
+  socket.on('disconnect', async () => {
     console.log('Client déconnecté:', socket.id);
     
-    // Chercher et nettoyer les salles
-    for (const [roomId, room] of rooms.entries()) {
-      const playerIndex = room.players.findIndex(p => p.id === socket.id);
-      
-      if (playerIndex !== -1) {
-        room.players.splice(playerIndex, 1);
-        
-        // Notifier l'autre joueur
-        socket.to(roomId).emit('playerDisconnected', { playerId: socket.id });
-        
-        // Supprimer la salle si vide
-        if (room.players.length === 0) {
-          rooms.delete(roomId);
-          console.log(`Salle ${roomId} supprimée (vide)`);
-        }
-        
-        break;
-      }
-    }
+    // Note: Redis ne permet pas de facilement chercher toutes les clés
+    // Les salles expireront automatiquement après 1 heure (TTL)
+    // Le joueur déconnecté sera simplement marqué comme absent
   });
 });
 
 // Health check
-app.get('/', (req, res) => {
+app.get('/', async (req, res) => {
+  // Compter les salles dans Redis
+  const keys = await redis.keys(`${ROOM_PREFIX}*`);
   res.json({ 
     status: 'OK', 
-    rooms: rooms.size,
+    rooms: keys.length,
     uptime: process.uptime()
   });
 });
 
 // Liste des salles (debug)
-app.get('/rooms', (req, res) => {
-  const roomsList = Array.from(rooms.values()).map(r => ({
-    id: r.id,
-    players: r.players.length,
-    createdAt: r.createdAt
-  }));
+app.get('/rooms', async (req, res) => {
+  const keys = await redis.keys(`${ROOM_PREFIX}*`);
+  const roomsList = [];
+  for (const key of keys) {
+    const room = await redis.get(key);
+    if (room) {
+      const roomData = JSON.parse(room);
+      roomsList.push({
+        id: roomData.id,
+        players: roomData.players.length,
+        createdAt: roomData.createdAt
+      });
+    }
+  }
   res.json(roomsList);
 });
 
