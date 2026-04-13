@@ -40,8 +40,11 @@ const redis = new Redis({
 
 const ROOM_PREFIX = 'room:';
 const ROOM_TTL = 60 * 60; // 1 heure
+const USER_PREFIX = 'user:';
+const DECK_PREFIX = 'deck:';
+const STATS_PREFIX = 'stats:';
 
-// Fonctions helper pour Redis
+// Fonctions helper pour Redis - Salles
 async function getRoom(roomId) {
   const room = await redis.get(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
   return room ? JSON.parse(room) : null;
@@ -54,6 +57,129 @@ async function setRoom(roomId, room) {
 async function deleteRoom(roomId) {
   await redis.del(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
 }
+
+// Fonctions helper pour Redis - Utilisateurs
+async function getUser(username) {
+  const user = await redis.hgetall(`${USER_PREFIX}${username.toLowerCase()}`);
+  return Object.keys(user).length > 0 ? user : null;
+}
+
+async function createUser(username, passwordHash) {
+  await redis.hset(`${USER_PREFIX}${username.toLowerCase()}`, {
+    username: username,
+    password: passwordHash,
+    createdAt: Date.now()
+  });
+  // Initialiser les stats
+  await redis.hset(`${STATS_PREFIX}${username.toLowerCase()}`, {
+    wins: 0,
+    losses: 0,
+    draws: 0,
+    gamesPlayed: 0
+  });
+}
+
+async function getUserStats(username) {
+  const stats = await redis.hgetall(`${STATS_PREFIX}${username.toLowerCase()}`);
+  return stats || { wins: 0, losses: 0, draws: 0, gamesPlayed: 0 };
+}
+
+async function updateUserStats(username, result) {
+  const key = `${STATS_PREFIX}${username.toLowerCase()}`;
+  await redis.hincrby(key, 'gamesPlayed', 1);
+  if (result === 'win') {
+    await redis.hincrby(key, 'wins', 1);
+  } else if (result === 'loss') {
+    await redis.hincrby(key, 'losses', 1);
+  } else if (result === 'draw') {
+    await redis.hincrby(key, 'draws', 1);
+  }
+}
+
+async function saveDeck(username, deckName, deckData) {
+  await redis.set(`${DECK_PREFIX}${username.toLowerCase()}:${deckName}`, JSON.stringify(deckData));
+}
+
+async function getDecks(username) {
+  const keys = await redis.keys(`${DECK_PREFIX}${username.toLowerCase()}:*`);
+  const decks = {};
+  for (const key of keys) {
+    const deckName = key.split(':').pop();
+    const deck = await redis.get(key);
+    if (deck) {
+      decks[deckName] = JSON.parse(deck);
+    }
+  }
+  return decks;
+}
+
+// Routes API pour les comptes
+app.post('/api/register', async (req, res) => {
+  const { username, password } = req.body;
+  
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username et password requis' });
+  }
+  
+  // Vérifier si l'utilisateur existe déjà
+  const existingUser = await getUser(username);
+  if (existingUser) {
+    return res.status(409).json({ error: 'Ce pseudo existe déjà' });
+  }
+  
+  // Créer l'utilisateur (simple hash pour l'instant)
+  const crypto = require('crypto');
+  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+  
+  await createUser(username, passwordHash);
+  
+  res.json({ success: true, message: 'Compte créé avec succès' });
+});
+
+app.post('/api/login', async (req, res) => {
+  const { username, password } = req.body;
+  
+  if (!username || !password) {
+    return res.status(400).json({ error: 'Username et password requis' });
+  }
+  
+  const user = await getUser(username);
+  if (!user) {
+    return res.status(401).json({ error: 'Pseudo ou mot de passe incorrect' });
+  }
+  
+  const crypto = require('crypto');
+  const passwordHash = crypto.createHash('sha256').update(password).digest('hex');
+  
+  if (user.password !== passwordHash) {
+    return res.status(401).json({ error: 'Pseudo ou mot de passe incorrect' });
+  }
+  
+  // Récupérer les stats
+  const stats = await getUserStats(username);
+  
+  res.json({ 
+    success: true, 
+    username: user.username,
+    stats: stats
+  });
+});
+
+app.get('/api/stats/:username', async (req, res) => {
+  const stats = await getUserStats(req.params.username);
+  res.json(stats);
+});
+
+app.post('/api/deck/save', async (req, res) => {
+  const { username, deckName, deckData } = req.body;
+  await saveDeck(username, deckName, deckData);
+  res.json({ success: true });
+});
+
+app.get('/api/decks/:username', async (req, res) => {
+  const decks = await getDecks(req.params.username);
+  res.json(decks);
+});
 
 // Nettoyer les salles inactives (Redis gère le TTL automatiquement)
 
