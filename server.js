@@ -5,8 +5,18 @@ const cors = require('cors');
 const { v4: uuidv4 } = require('uuid');
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "*",
+  methods: ["GET", "POST", "OPTIONS"],
+  credentials: true
+}));
 app.use(express.json());
+
+// Log toutes les requêtes
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url} - Origin: ${req.headers.origin || 'none'}`);
+  next();
+});
 
 const server = http.createServer(app);
 const io = new Server(server, {
