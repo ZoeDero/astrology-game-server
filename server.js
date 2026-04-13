@@ -49,7 +49,7 @@ io.on('connection', (socket) => {
   console.log('Nouveau client connecté:', socket.id);
 
   // Créer une salle
-  socket.on('createRoom', () => {
+  socket.on('createRoom', ({ playerName }) => {
     const roomId = uuidv4().substr(0, 8).toUpperCase();
     
     rooms.set(roomId, {
@@ -58,19 +58,20 @@ io.on('connection', (socket) => {
       players: [{
         id: socket.id,
         isHost: true,
-        ready: false
+        ready: false,
+        name: playerName || 'Joueur 1'
       }],
       gameState: null,
       createdAt: Date.now()
     });
     
     socket.join(roomId);
-    socket.emit('roomCreated', { roomId, isHost: true });
-    console.log(`Salle créée: ${roomId} par ${socket.id}`);
+    socket.emit('roomCreated', { roomId, isHost: true, playerName: playerName || 'Joueur 1' });
+    console.log(`Salle créée: ${roomId} par ${socket.id} (${playerName || 'Joueur 1'})`);
   });
 
   // Rejoindre une salle
-  socket.on('joinRoom', (roomId) => {
+  socket.on('joinRoom', ({ roomId, playerName }) => {
     const room = rooms.get(roomId.toUpperCase());
     
     if (!room) {
@@ -86,23 +87,37 @@ io.on('connection', (socket) => {
     room.players.push({
       id: socket.id,
       isHost: false,
-      ready: false
+      ready: false,
+      name: playerName || 'Joueur 2'
     });
     
+    const joiningPlayer = room.players.find(p => p.id === socket.id);
+    
     socket.join(roomId);
-    socket.emit('roomJoined', { roomId, isHost: false });
+    socket.emit('roomJoined', { 
+      roomId, 
+      isHost: false, 
+      playerName: joiningPlayer?.name || 'Joueur 2',
+      opponentName: room.players[0]?.name || 'Joueur 1'
+    });
     
     // Notifier l'hôte
     socket.to(roomId).emit('playerJoined', {
       playerId: socket.id,
+      playerName: joiningPlayer?.name || 'Joueur 2',
       playersCount: room.players.length
     });
     
-    console.log(`Joueur ${socket.id} a rejoint ${roomId}`);
+    console.log(`Joueur ${socket.id} (${joiningPlayer?.name}) a rejoint ${roomId}`);
     
-    // Si 2 joueurs, démarrer la partie
+    // Si 2 joueurs, démarrer la partie avec les noms
     if (room.players.length === 2) {
-      io.to(roomId).emit('gameReady');
+      const hostPlayer = room.players[0];
+      const guestPlayer = room.players[1];
+      io.to(roomId).emit('gameReady', {
+        hostName: hostPlayer?.name || 'Joueur 1',
+        guestName: guestPlayer?.name || 'Joueur 2'
+      });
     }
   });
 
