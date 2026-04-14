@@ -70,59 +70,88 @@ async function deleteRoom(roomId) {
 
 // Fonctions helper pour Redis - Utilisateurs
 async function getUser(username) {
-  const user = await redis.hgetall(`${USER_PREFIX}${username.toLowerCase()}`);
-  if (!user || typeof user !== 'object') return null;
-  const keys = Object.keys(user);
-  return keys.length > 0 ? user : null;
+  if (!redis) return null;
+  try {
+    const user = await redis.hgetall(`${USER_PREFIX}${username.toLowerCase()}`);
+    if (!user || user === null || user === undefined) return null;
+    if (typeof user !== 'object') return null;
+    const keys = Object.keys(user);
+    return keys.length > 0 ? user : null;
+  } catch (e) {
+    console.error('Erreur getUser:', e);
+    return null;
+  }
 }
 
 async function createUser(username, passwordHash) {
-  await redis.hset(`${USER_PREFIX}${username.toLowerCase()}`, {
-    username: username,
-    password: passwordHash,
-    createdAt: Date.now()
-  });
-  // Initialiser les stats
-  await redis.hset(`${STATS_PREFIX}${username.toLowerCase()}`, {
-    wins: 0,
-    losses: 0,
-    draws: 0,
-    gamesPlayed: 0
-  });
+  if (!redis) return;
+  try {
+    await redis.hset(`${USER_PREFIX}${username.toLowerCase()}`, {
+      username: username,
+      password: passwordHash,
+      createdAt: Date.now()
+    });
+    await redis.hset(`${STATS_PREFIX}${username.toLowerCase()}`, {
+      wins: 0,
+      losses: 0,
+      draws: 0,
+      gamesPlayed: 0
+    });
+  } catch (e) {
+    console.error('Erreur createUser:', e);
+  }
 }
 
 async function getUserStats(username) {
-  const stats = await redis.hgetall(`${STATS_PREFIX}${username.toLowerCase()}`);
-  return stats || { wins: 0, losses: 0, draws: 0, gamesPlayed: 0 };
+  if (!redis) return { wins: 0, losses: 0, draws: 0, gamesPlayed: 0 };
+  try {
+    const stats = await redis.hgetall(`${STATS_PREFIX}${username.toLowerCase()}`);
+    return stats || { wins: 0, losses: 0, draws: 0, gamesPlayed: 0 };
+  } catch (e) {
+    console.error('Erreur getUserStats:', e);
+    return { wins: 0, losses: 0, draws: 0, gamesPlayed: 0 };
+  }
 }
 
 async function updateUserStats(username, result) {
-  const key = `${STATS_PREFIX}${username.toLowerCase()}`;
-  await redis.hincrby(key, 'gamesPlayed', 1);
-  if (result === 'win') {
-    await redis.hincrby(key, 'wins', 1);
-  } else if (result === 'loss') {
-    await redis.hincrby(key, 'losses', 1);
-  } else if (result === 'draw') {
-    await redis.hincrby(key, 'draws', 1);
+  if (!redis) return;
+  try {
+    const key = `${STATS_PREFIX}${username.toLowerCase()}`;
+    await redis.hincrby(key, 'gamesPlayed', 1);
+    if (result === 'win') await redis.hincrby(key, 'wins', 1);
+    else if (result === 'loss') await redis.hincrby(key, 'losses', 1);
+    else if (result === 'draw') await redis.hincrby(key, 'draws', 1);
+  } catch (e) {
+    console.error('Erreur updateUserStats:', e);
   }
 }
 
 async function saveDeck(username, deckName, deckData) {
-  await redis.set(`${DECK_PREFIX}${username.toLowerCase()}:${deckName}`, JSON.stringify(deckData));
+  if (!redis) return;
+  try {
+    await redis.set(`${DECK_PREFIX}${username.toLowerCase()}:${deckName}`, JSON.stringify(deckData));
+  } catch (e) {
+    console.error('Erreur saveDeck:', e);
+  }
 }
 
 async function getDecks(username) {
-  const keys = await redis.keys(`${DECK_PREFIX}${username.toLowerCase()}:*`);
-  const decks = {};
-  for (const key of keys) {
-    const deckName = key.split(':').pop();
-    const deck = await redis.get(key);
-    if (deck) {
-      decks[deckName] = JSON.parse(deck);
+  if (!redis) return {};
+  try {
+    const keys = await redis.keys(`${DECK_PREFIX}${username.toLowerCase()}:*`);
+    const decks = {};
+    for (const key of keys) {
+      const deckName = key.split(':').pop();
+      const deck = await redis.get(key);
+      if (deck) {
+        decks[deckName] = typeof deck === 'string' ? JSON.parse(deck) : deck;
+      }
     }
+    return decks;
+  } catch (e) {
+    console.error('Erreur getDecks:', e);
+    return {};
   }
-  return decks;
 }
 
 // Routes API pour les comptes
