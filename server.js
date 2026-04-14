@@ -56,8 +56,15 @@ const STATS_PREFIX = 'stats:';
 
 // Fonctions helper pour Redis - Salles
 async function getRoom(roomId) {
-  const room = await redis.get(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
-  return room ? JSON.parse(room) : null;
+  try {
+    const room = await redis.get(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
+    if (!room) return null;
+    if (typeof room === 'object') return room;
+    return JSON.parse(room);
+  } catch (e) {
+    console.error('Erreur getRoom:', e);
+    return null;
+  }
 }
 
 async function setRoom(roomId, room) {
@@ -376,21 +383,26 @@ app.get('/', async (req, res) => {
 });
 
 // Liste des salles (debug)
-app.get('/rooms', async (req, res) => {
-  const keys = await redis.keys(`${ROOM_PREFIX}*`);
-  const roomsList = [];
-  for (const key of keys) {
-    const room = await redis.get(key);
-    if (room) {
-      const roomData = JSON.parse(room);
-      roomsList.push({
-        id: roomData.id,
-        players: roomData.players.length,
-        createdAt: roomData.createdAt
-      });
+app.get('/api/rooms', async (req, res) => {
+  try {
+    const keys = await redis.keys(`${ROOM_PREFIX}*`);
+    const roomsList = [];
+    for (const key of keys) {
+      const room = await redis.get(key);
+      if (room) {
+        const roomData = typeof room === 'string' ? JSON.parse(room) : room;
+        roomsList.push({
+          id: roomData.id,
+          players: roomData.players.length,
+          createdAt: roomData.createdAt
+        });
+      }
     }
+    res.json(roomsList);
+  } catch (e) {
+    console.error('Erreur rooms:', e);
+    res.json([]);
   }
-  res.json(roomsList);
 });
 
 const PORT = process.env.PORT || 3001;
