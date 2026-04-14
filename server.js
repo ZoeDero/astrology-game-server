@@ -68,11 +68,19 @@ async function getRoom(roomId) {
 }
 
 async function setRoom(roomId, room) {
-  await redis.set(`${ROOM_PREFIX}${roomId.toUpperCase()}`, JSON.stringify(room), { ex: ROOM_TTL });
+  try {
+    await redis.set(`${ROOM_PREFIX}${roomId.toUpperCase()}`, JSON.stringify(room), { ex: ROOM_TTL });
+  } catch (e) {
+    console.error('Erreur setRoom:', e);
+  }
 }
 
 async function deleteRoom(roomId) {
-  await redis.del(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
+  try {
+    await redis.del(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
+  } catch (e) {
+    console.error('Erreur deleteRoom:', e);
+  }
 }
 
 // Fonctions helper pour Redis - Utilisateurs
@@ -371,15 +379,22 @@ io.on('connection', (socket) => {
   });
 });
 
-// Health check
+// Health check - protégé contre les erreurs Redis
 app.get('/', async (req, res) => {
-  // Compter les salles dans Redis
-  const keys = await redis.keys(`${ROOM_PREFIX}*`);
-  res.json({ 
-    status: 'OK', 
-    rooms: keys.length,
-    uptime: process.uptime()
-  });
+  try {
+    const keys = await redis.keys(`${ROOM_PREFIX}*`);
+    res.json({ 
+      status: 'OK', 
+      rooms: keys.length,
+      uptime: process.uptime()
+    });
+  } catch (e) {
+    res.json({ 
+      status: 'OK (Redis indisponible)', 
+      rooms: 0,
+      uptime: process.uptime()
+    });
+  }
 });
 
 // Liste des salles (debug)
