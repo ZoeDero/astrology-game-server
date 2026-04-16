@@ -305,7 +305,7 @@ io.on('connection', (socket) => {
       socket.join(roomId);
       console.log(`[CREATE] socket.join réussi`);
       
-      socket.emit('roomCreated', { roomId, isHost: true, playerName: playerName || 'Joueur 1' });
+      socket.emit('roomCreated', { roomId, isHost: true, playerName: playerName || 'Joueur 1', players: room.players });
       console.log(`[CREATE] roomCreated émis`);
     } catch (err) {
       console.error(`[CREATE] ERREUR:`, err);
