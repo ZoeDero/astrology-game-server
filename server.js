@@ -356,7 +356,7 @@ io.on('connection', (socket) => {
     io.to(roomId).emit('playerJoined', {
       playerId: socket.id,
       playerName: joiningPlayer?.name || 'Joueur 2',
-      playersCount: room.players.length
+      players: room.players
     });
     
     console.log(`Joueur ${socket.id} (${joiningPlayer?.name}) a rejoint ${roomId}`);
