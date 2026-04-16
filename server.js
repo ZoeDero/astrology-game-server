@@ -280,26 +280,37 @@ io.on('connection', (socket) => {
 
   // Créer une salle
   socket.on('createRoom', async ({ playerName }) => {
-    const roomId = uuidv4().substr(0, 8).toUpperCase();
-    
-    const room = {
-      id: roomId,
-      host: socket.id,
-      players: [{
-        id: socket.id,
-        isHost: true,
-        ready: false,
-        name: playerName || 'Joueur 1'
-      }],
-      gameState: null,
-      createdAt: Date.now()
-    };
-    
-    await setRoom(roomId, room);
-    
-    socket.join(roomId);
-    socket.emit('roomCreated', { roomId, isHost: true, playerName: playerName || 'Joueur 1' });
-    console.log(`Salle créée: ${roomId} par ${socket.id} (${playerName || 'Joueur 1'})`);
+    console.log(`[CREATE] Tentative createRoom par ${socket.id} (${playerName})`);
+    try {
+      const roomId = uuidv4().substr(0, 8).toUpperCase();
+      console.log(`[CREATE] RoomID généré: ${roomId}`);
+      
+      const room = {
+        id: roomId,
+        host: socket.id,
+        players: [{
+          id: socket.id,
+          isHost: true,
+          ready: false,
+          name: playerName || 'Joueur 1'
+        }],
+        gameState: null,
+        createdAt: Date.now()
+      };
+      
+      console.log(`[CREATE] Appel setRoom...`);
+      await setRoom(roomId, room);
+      console.log(`[CREATE] setRoom réussi`);
+      
+      socket.join(roomId);
+      console.log(`[CREATE] socket.join réussi`);
+      
+      socket.emit('roomCreated', { roomId, isHost: true, playerName: playerName || 'Joueur 1' });
+      console.log(`[CREATE] roomCreated émis`);
+    } catch (err) {
+      console.error(`[CREATE] ERREUR:`, err);
+      socket.emit('error', { message: 'Erreur création salle' });
+    }
   });
 
   // Rejoindre une salle
