@@ -304,9 +304,14 @@ io.on('connection', (socket) => {
 
   // Rejoindre une salle
   socket.on('joinRoom', async ({ roomId, playerName }) => {
+    console.log(`[JOIN] Tentative de joinRoom: ${roomId} par ${socket.id} (${playerName})`);
+    console.log(`[JOIN] Mode mémoire: ${useMemoryFallback}`);
+    
     const room = await getRoom(roomId);
+    console.log(`[JOIN] Room trouvée:`, room);
     
     if (!room) {
+      console.log(`[JOIN] Room ${roomId} non trouvée!`);
       socket.emit('error', { message: 'Salle non trouvée' });
       return;
     }
