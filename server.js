@@ -30,6 +30,9 @@ app.use(cors({
 
 app.use(express.json());
 
+// Servir les fichiers statiques du build React
+app.use(express.static('build'));
+
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: {
@@ -37,16 +40,27 @@ const io = new Server(server, {
     methods: ["GET", "POST"],
     credentials: false
   },
-  transports: ['polling', 'websocket'],
+  transports: ['websocket', 'polling'],
   pingTimeout: 30000,
   pingInterval: 10000
 });
 
+// Fallback mémoire si Redis ne fonctionne pas
+const memoryStore = new Map();
+let useMemoryFallback = false;
+
 // Redis client pour stocker les salles (persistance)
-const redis = new Redis({
-  url: process.env.UPSTASH_REDIS_REST_URL,
-  token: process.env.UPSTASH_REDIS_REST_TOKEN,
-});
+let redis;
+try {
+  redis = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
+  console.log('Redis initialisé avec succès');
+} catch (e) {
+  console.error('Erreur initialisation Redis:', e);
+  useMemoryFallback = true;
+}
 
 const ROOM_PREFIX = 'room:';
 const ROOM_TTL = 60 * 60; // 1 heure
@@ -54,29 +68,43 @@ const USER_PREFIX = 'user:';
 const DECK_PREFIX = 'deck:';
 const STATS_PREFIX = 'stats:';
 
-// Fonctions helper pour Redis - Salles
+// Fonctions helper pour Redis - Salles avec fallback mémoire
 async function getRoom(roomId) {
   try {
+    if (useMemoryFallback) {
+      return memoryStore.get(roomId.toUpperCase()) || null;
+    }
     const room = await redis.get(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
     if (!room) return null;
     if (typeof room === 'object') return room;
     return JSON.parse(room);
   } catch (e) {
-    console.error('Erreur getRoom:', e);
-    return null;
+    console.error('Erreur getRoom, fallback mémoire:', e);
+    useMemoryFallback = true;
+    return memoryStore.get(roomId.toUpperCase()) || null;
   }
 }
 
 async function setRoom(roomId, room) {
   try {
+    if (useMemoryFallback) {
+      memoryStore.set(roomId.toUpperCase(), room);
+      return;
+    }
     await redis.set(`${ROOM_PREFIX}${roomId.toUpperCase()}`, JSON.stringify(room), { ex: ROOM_TTL });
   } catch (e) {
-    console.error('Erreur setRoom:', e);
+    console.error('Erreur setRoom, fallback mémoire:', e);
+    useMemoryFallback = true;
+    memoryStore.set(roomId.toUpperCase(), room);
   }
 }
 
 async function deleteRoom(roomId) {
   try {
+    if (useMemoryFallback) {
+      memoryStore.delete(roomId.toUpperCase());
+      return;
+    }
     await redis.del(`${ROOM_PREFIX}${roomId.toUpperCase()}`);
   } catch (e) {
     console.error('Erreur deleteRoom:', e);
@@ -373,9 +401,25 @@ io.on('connection', (socket) => {
   socket.on('disconnect', async () => {
     console.log('Client déconnecté:', socket.id);
     
-    // Note: Redis ne permet pas de facilement chercher toutes les clés
-    // Les salles expireront automatiquement après 1 heure (TTL)
-    // Le joueur déconnecté sera simplement marqué comme absent
+    // Chercher et retirer le joueur de toutes les salles
+    try {
+      const keys = await redis.keys(`${ROOM_PREFIX}*`);
+      for (const key of keys) {
+        const room = await redis.get(key);
+        if (room) {
+          const roomData = typeof room === 'string' ? JSON.parse(room) : room;
+          const playerIndex = roomData.players.findIndex(p => p.id === socket.id);
+          if (playerIndex !== -1) {
+            roomData.players.splice(playerIndex, 1);
+            await setRoom(roomData.id, roomData);
+            socket.to(roomData.id).emit('playerDisconnected', { playerId: socket.id });
+            console.log(`Joueur ${socket.id} retiré de la salle ${roomData.id}`);
+          }
+        }
+      }
+    } catch (e) {
+      console.error('Erreur lors de la déconnexion:', e);
+    }
   });
 });
 
