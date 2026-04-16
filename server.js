@@ -341,8 +341,8 @@ io.on('connection', (socket) => {
       opponentName: room.players[0]?.name || 'Joueur 1'
     });
     
-    // Notifier l'hôte
-    socket.to(roomId).emit('playerJoined', {
+    // Notifier tout le monde dans la room (y compris l'hôte)
+    io.to(roomId).emit('playerJoined', {
       playerId: socket.id,
       playerName: joiningPlayer?.name || 'Joueur 2',
       playersCount: room.players.length
