@@ -113,13 +113,38 @@ async function deleteRoom(roomId) {
 
 // Fonctions helper pour Redis - Utilisateurs
 async function getUser(username) {
-  if (!redis) return null;
+  console.log(`[GETUSER] Recherche de l'utilisateur: ${username}`);
+  console.log(`[GETUSER] Mode mémoire: ${useMemoryFallback}`);
+  console.log(`[GETUSER] Redis disponible:`, !!redis);
+  
+  if (!redis) {
+    console.log(`[GETUSER] Redis non disponible, utilisation du fallback mémoire`);
+    const user = memoryStore.get(username.toLowerCase()) || null;
+    console.log(`[GETUSER] Résultat fallback mémoire:`, user);
+    return user;
+  }
+  
   try {
     const user = await redis.hgetall(`${USER_PREFIX}${username.toLowerCase()}`);
-    if (!user || user === null || user === undefined) return null;
-    if (typeof user !== 'object') return null;
+    console.log(`[GETUSER] Données brutes Redis:`, user);
+    
+    if (!user || user === null || user === undefined) {
+      console.log(`[GETUSER] Utilisateur non trouvé (null/undefined)`);
+      return null;
+    }
+    
+    if (typeof user !== 'object') {
+      console.log(`[GETUSER] Utilisateur pas un objet (type: ${typeof user})`);
+      return null;
+    }
+    
     const keys = Object.keys(user);
-    return keys.length > 0 ? user : null;
+    console.log(`[GETUSER] Keys trouvées:`, keys);
+    console.log(`[GETUSER] Keys length:`, keys.length);
+    
+    const result = keys.length > 0 ? user : null;
+    console.log(`[GETUSER] Résultat final:`, result);
+    return result;
   } catch (e) {
     console.error('Erreur getUser:', e);
     return null;
@@ -127,19 +152,35 @@ async function getUser(username) {
 }
 
 async function createUser(username, passwordHash) {
-  if (!redis) return;
+  console.log(`[CREATEUSER] Création de l'utilisateur: ${username}`);
+  
+  if (!redis) {
+    console.log(`[CREATEUSER] Redis non disponible, création annulée`);
+    return;
+  }
+  
   try {
+    console.log(`[CREATEUSER] Sauvegarde des données utilisateur...`);
     await redis.hset(`${USER_PREFIX}${username.toLowerCase()}`, {
       username: username,
       password: passwordHash,
       createdAt: Date.now()
     });
+    
+    console.log(`[CREATEUSER] Sauvegarde des stats...`);
     await redis.hset(`${STATS_PREFIX}${username.toLowerCase()}`, {
       wins: 0,
       losses: 0,
       draws: 0,
       gamesPlayed: 0
     });
+    
+    console.log(`[CREATEUSER] Utilisateur ${username} créé avec succès`);
+    
+    // Vérifier immédiatement que l'utilisateur a bien été créé
+    const verification = await redis.hgetall(`${USER_PREFIX}${username.toLowerCase()}`);
+    console.log(`[CREATEUSER] Vérification après création:`, verification);
+    
   } catch (e) {
     console.error('Erreur createUser:', e);
   }
@@ -201,13 +242,20 @@ async function getDecks(username) {
 app.post('/api/register', async (req, res) => {
   const { username, password } = req.body;
   
+  console.log(`[REGISTER] Tentative d'inscription pour: ${username}`);
+  
   if (!username || !password) {
+    console.log(`[REGISTER] Erreur: username ou password manquant`);
     return res.status(400).json({ error: 'Username et password requis' });
   }
   
   // Vérifier si l'utilisateur existe déjà
+  console.log(`[REGISTER] Vérification si l'utilisateur ${username} existe déjà...`);
   const existingUser = await getUser(username);
+  console.log(`[REGISTER] Utilisateur existant trouvé:`, !!existingUser);
+  
   if (existingUser) {
+    console.log(`[REGISTER] Erreur: l'utilisateur ${username} existe déjà`);
     return res.status(409).json({ error: 'Ce pseudo existe déjà' });
   }
   
@@ -315,7 +363,10 @@ io.on('connection', (socket) => {
 
   // Rejoindre une salle
   socket.on('joinRoom', async ({ roomId, playerName }) => {
-    console.log(`[JOIN] Tentative de joinRoom: ${roomId} par ${socket.id} (${playerName})`);
+    console.log(`[JOIN] ===== TENTATIVE DE JOIN =====`);
+    console.log(`[JOIN] RoomID: ${roomId}`);
+    console.log(`[JOIN] SocketID: ${socket.id}`);
+    console.log(`[JOIN] PlayerName: ${playerName}`);
     console.log(`[JOIN] Mode mémoire: ${useMemoryFallback}`);
     
     const room = await getRoom(roomId);
@@ -336,7 +387,7 @@ io.on('connection', (socket) => {
       id: socket.id,
       isHost: false,
       ready: false,
-      name: playerName || 'Joueur 2'
+      name: playerName
     });
     
     // Sauvegarder la salle mise à jour
@@ -348,8 +399,8 @@ io.on('connection', (socket) => {
     socket.emit('roomJoined', { 
       roomId, 
       isHost: false, 
-      playerName: joiningPlayer?.name || 'Joueur 2',
-      opponentName: room.players[0]?.name || 'Joueur 1'
+      playerName: joiningPlayer?.name,
+      opponentName: room.players[0]?.name
     });
     
     // Notifier tout le monde dans la room (y compris l'hôte)
@@ -391,6 +442,98 @@ io.on('connection', (socket) => {
     }
     
     socket.to(roomId).emit('playerReady', { playerId: socket.id, ready });
+  });
+
+  // Test de communication
+  socket.on('test', (data) => {
+    console.log(`[TEST] Reçu:`, data);
+    socket.emit('testResponse', { received: true, message: 'Serveur a bien reçu' });
+  });
+
+  // Démarrer la partie (manquant)
+  socket.on('startGame', async ({ roomId }) => {
+    console.log(`[START] ===== DEMANDE DE DEMARRAGE =====`);
+    console.log(`[START] RoomID: ${roomId}`);
+    console.log(`[START] SocketID: ${socket.id}`);
+    console.log(`[START] Timestamp: ${new Date().toISOString()}`);
+    
+    try {
+      const room = await getRoom(roomId);
+      if (!room) {
+        console.log(`[START] Erreur: salle ${roomId} non trouvée`);
+        socket.emit('gameStartError', 'Salle non trouvée');
+        return;
+      }
+      
+      if (room.players.length !== 2) {
+        console.log(`[START] Erreur: salle ${roomId} n'a pas 2 joueurs (${room.players.length})`);
+        socket.emit('gameStartError', 'La salle doit contenir 2 joueurs');
+        return;
+      }
+      
+      // Vérifier que l'hôte démarre la partie
+      const hostPlayer = room.players.find(p => p.isHost);
+      if (!hostPlayer || hostPlayer.id !== socket.id) {
+        console.log(`[START] Erreur: seul l'hôte peut démarrer la partie`);
+        console.log(`[START] HostPlayer:`, hostPlayer);
+        console.log(`[START] SocketID: ${socket.id}`);
+        socket.emit('gameStartError', 'Seul l\'hôte peut démarrer la partie');
+        return;
+      }
+      
+      console.log(`[START] Initialisation de la partie pour la salle ${roomId}`);
+      
+      // Créer l'état de jeu initial
+      const initialGameState = {
+        phase: 'playing',
+        currentPlayer: room.players[0].id, // L'hôte commence
+        turn: 1,
+        player: {
+          life: 20,
+          mana: 1,
+          maxMana: 1,
+          hand: [], // Sera rempli plus tard
+          deck: [], // Sera rempli plus tard
+          lands: [],
+          field: [],
+          graveyard: [],
+          attackedCreatures: []
+        },
+        ai: {
+          life: 20,
+          mana: 1,
+          maxMana: 1,
+          hand: [],
+          deck: [],
+          lands: [],
+          field: [],
+          graveyard: [],
+          attackedCreatures: []
+        }
+      };
+      
+      room.gameState = initialGameState;
+      await setRoom(roomId, room);
+      
+      console.log(`[START] Émission gameStarted vers la salle ${roomId}`);
+      console.log(`[START] GameState:`, initialGameState);
+      
+      // Notifier tous les joueurs avec le même événement
+      console.log(`[START] Envoi gameStarted à ${room.players.length} joueurs`);
+      io.to(roomId).emit('gameStarted', {
+        gameState: initialGameState,
+        opponentId: room.players[1].id // Pour l'hôte, l'adversaire est le joueur 2
+      });
+      console.log(`[START] gameStarted émis avec succès`);
+      
+      // Confirmer à l'émetteur
+      socket.emit('startGameReceived', { success: true, roomId });
+      console.log(`[START] startGameReceived envoyé à l'émetteur`);
+      
+    } catch (error) {
+      console.error(`[START] Erreur lors du démarrage:`, error);
+      socket.emit('gameStartError', 'Erreur lors du démarrage de la partie');
+    }
   });
 
   // Mettre à jour l'état du jeu
