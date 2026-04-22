@@ -483,34 +483,77 @@ io.on('connection', (socket) => {
       
       console.log(`[START] Initialisation de la partie pour la salle ${roomId}`);
       
-      // Créer l'état de jeu initial
+      // Créer l'état de jeu initial pour multijoueur
       const initialGameState = {
         phase: 'playing',
         currentPlayer: room.players[0].id, // L'hôte commence
         turn: 1,
-        player: {
-          life: 20,
-          mana: 1,
-          maxMana: 1,
-          hand: [], // Sera rempli plus tard
-          deck: [], // Sera rempli plus tard
-          lands: [],
-          field: [],
-          graveyard: [],
-          attackedCreatures: []
-        },
-        ai: {
-          life: 20,
-          mana: 1,
-          maxMana: 1,
-          hand: [],
-          deck: [],
-          lands: [],
-          field: [],
-          graveyard: [],
-          attackedCreatures: []
+        players: {
+          [room.players[0].id]: {
+            life: 20,
+            mana: 1,
+            maxMana: 1,
+            hand: [], // Sera rempli plus tard
+            deck: [], // Sera rempli plus tard
+            lands: [],
+            field: [],
+            graveyard: [],
+            attackedCreatures: []
+          },
+          [room.players[1].id]: {
+            life: 20,
+            mana: 1,
+            maxMana: 1,
+            hand: [], // Sera rempli plus tard
+            deck: [], // Sera rempli plus tard
+            lands: [],
+            field: [],
+            graveyard: [],
+            attackedCreatures: []
+          }
         }
       };
+      
+      // Initialiser les decks et les mains pour les deux joueurs
+      console.log(`[START] Initialisation des decks et mains`);
+      
+      // Pour chaque joueur, créer un deck de base et piocher 5 cartes
+      for (let i = 0; i < room.players.length; i++) {
+        const player = room.players[i];
+        const playerSocketId = player.id;
+        
+        // Créer un deck de base (30 cartes)
+        const basicDeck = [
+          { id: 'basic_land_1', name: 'Terrain de base', type: 'land', cost: 0 },
+          { id: 'basic_land_2', name: 'Terrain de base', type: 'land', cost: 0 },
+          { id: 'basic_land_3', name: 'Terrain de base', type: 'land', cost: 0 },
+          { id: 'basic_land_4', name: 'Terrain de base', type: 'land', cost: 0 },
+          { id: 'basic_land_5', name: 'Terrain de base', type: 'land', cost: 0 },
+          { id: 'basic_creature_1', name: 'Créature de base', type: 'creature', cost: 1, attack: 2, defense: 1 },
+          { id: 'basic_creature_2', name: 'Créature de base', type: 'creature', cost: 2, attack: 3, defense: 2 },
+          { id: 'basic_creature_3', name: 'Créature de base', type: 'creature', cost: 1, attack: 1, defense: 3 },
+          { id: 'basic_creature_4', name: 'Créature de base', type: 'creature', cost: 2, attack: 2, defense: 2 },
+          { id: 'basic_creature_5', name: 'Créature de base', type: 'creature', cost: 3, attack: 4, defense: 3 }
+        ];
+        
+        // Compléter le deck pour avoir 30 cartes
+        const fullDeck = [];
+        for (let j = 0; j < 6; j++) {
+          fullDeck.push(...basicDeck);
+        }
+        
+        // Mélanger le deck
+        const shuffledDeck = fullDeck.sort(() => Math.random() - 0.5);
+        
+        // Piocher 5 cartes pour la main
+        const hand = shuffledDeck.slice(0, 5);
+        const remainingDeck = shuffledDeck.slice(5);
+        
+        initialGameState.players[playerSocketId].deck = remainingDeck;
+        initialGameState.players[playerSocketId].hand = hand;
+        
+        console.log(`[START] Joueur ${player.name} - Main: ${hand.length} cartes, Deck: ${remainingDeck.length} cartes`);
+      }
       
       room.gameState = initialGameState;
       await setRoom(roomId, room);
