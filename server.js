@@ -594,9 +594,139 @@ io.on('connection', (socket) => {
     socket.to(roomId).emit('opponentPlayedCard', { card, isPlayer });
   });
 
+  // Chat
+  socket.on('chatMessage', async ({ roomId, message, senderName }) => {
+    console.log(`[CHAT] ===== MESSAGE REÇU =====`);
+    console.log(`[CHAT] RoomID: ${roomId}`);
+    console.log(`[CHAT] Message: ${message}`);
+    console.log(`[CHAT] Sender: ${senderName}`);
+    console.log(`[CHAT] SocketID: ${socket.id}`);
+    
+    try {
+      const room = await getRoom(roomId);
+      if (!room) {
+        console.log(`[CHAT] Room ${roomId} non trouvée`);
+        return;
+      }
+      
+      // Vérifier que l'expéditeur est dans la room
+      const sender = room.players.find(p => p.id === socket.id);
+      if (!sender) {
+        console.log(`[CHAT] L'expéditeur n'est pas dans la room`);
+        return;
+      }
+      
+      const chatMessage = {
+        message,
+        sender: socket.id,
+        senderName: senderName || 'Joueur',
+        timestamp: Date.now()
+      };
+      
+      // Sauvegarder le message dans la room
+      if (!room.chatHistory) {
+        room.chatHistory = [];
+      }
+      room.chatHistory.push(chatMessage);
+      
+      // Garder seulement les 50 derniers messages
+      if (room.chatHistory.length > 50) {
+        room.chatHistory = room.chatHistory.slice(-50);
+      }
+      
+      await setRoom(roomId, room);
+      
+      // Envoyer le message à tous les joueurs de la room
+      io.to(roomId).emit('chatMessage', chatMessage);
+      
+      console.log(`[CHAT] Message envoyé à ${room.players.length} joueurs`);
+      
+    } catch (error) {
+      console.error(`[CHAT] Erreur:`, error);
+    }
+  });
+
+  socket.on('getChatHistory', async ({ roomId }) => {
+    console.log(`[CHAT] ===== DEMANDE HISTORIQUE =====`);
+    console.log(`[CHAT] RoomID: ${roomId}`);
+    console.log(`[CHAT] SocketID: ${socket.id}`);
+    
+    try {
+      const room = await getRoom(roomId);
+      if (!room) {
+        console.log(`[CHAT] Room ${roomId} non trouvée`);
+        return;
+      }
+      
+      const history = room.chatHistory || [];
+      console.log(`[CHAT] Envoi de ${history.length} messages d'historique`);
+      
+      socket.emit('chatHistory', { messages: history });
+      
+    } catch (error) {
+      console.error(`[CHAT] Erreur historique:`, error);
+    }
+  });
+
   // Fin de tour
-  socket.on('endTurn', ({ roomId, currentPlayer }) => {
-    socket.to(roomId).emit('turnEnded', { currentPlayer });
+  socket.on('endTurn', async ({ roomId, playerId }) => {
+    console.log(`[END TURN] ===== FIN DE TOUR =====`);
+    console.log(`[END TURN] RoomID: ${roomId}`);
+    console.log(`[END TURN] PlayerID: ${playerId}`);
+    console.log(`[END TURN] SocketID: ${socket.id}`);
+    
+    try {
+      const room = await getRoom(roomId);
+      if (!room) {
+        console.log(`[END TURN] Room ${roomId} non trouvée`);
+        return;
+      }
+      
+      if (!room.gameState) {
+        console.log(`[END TURN] Pas de gameState dans la room`);
+        return;
+      }
+      
+      // Vérifier que c'est bien le tour du joueur qui demande
+      if (room.gameState.currentPlayer !== playerId) {
+        console.log(`[END TURN] Ce n'est pas le tour de ce joueur: ${playerId} != ${room.gameState.currentPlayer}`);
+        return;
+      }
+      
+      // Trouver le prochain joueur
+      const currentPlayerIndex = room.players.findIndex(p => p.id === playerId);
+      const nextPlayerIndex = (currentPlayerIndex + 1) % room.players.length;
+      const nextPlayerId = room.players[nextPlayerIndex].id;
+      
+      console.log(`[END TURN] Changement de tour: ${playerId} -> ${nextPlayerId}`);
+      
+      // Mettre à jour le gameState
+      room.gameState.currentPlayer = nextPlayerId;
+      room.gameState.turn = room.gameState.turn + 1;
+      
+      // Réinitialiser le mana pour le prochain joueur
+      if (room.gameState.players[nextPlayerId]) {
+        const lands = room.gameState.players[nextPlayerId].lands || [];
+        room.gameState.players[nextPlayerId].mana = lands.reduce((total, land) => total + (land.mana || 1), 0);
+        room.gameState.players[nextPlayerId].maxMana = room.gameState.players[nextPlayerId].mana;
+        room.gameState.players[nextPlayerId].attackedCreatures = []; // Réinitialiser les créatures qui ont attaqué
+      }
+      
+      await setRoom(roomId, room);
+      
+      console.log(`[END TURN] Nouveau tour: Joueur ${nextPlayerId}, Tour ${room.gameState.turn}`);
+      
+      // Notifier tous les joueurs
+      io.to(roomId).emit('turnEnded', { 
+        gameState: room.gameState,
+        nextPlayerId: nextPlayerId
+      });
+      
+      console.log(`[END TURN] turnEnded émis à tous les joueurs`);
+      
+    } catch (error) {
+      console.error(`[END TURN] Erreur:`, error);
+    }
   });
 
   // Déconnexion
