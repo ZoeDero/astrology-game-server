@@ -315,6 +315,32 @@ app.get('/api/decks/:username', async (req, res) => {
 
 // Nettoyer les salles inactives (Redis gère le TTL automatiquement)
 
+// Stockage pour le matchmaking
+const matchmakingQueue = [];
+const players = new Map();
+
+// Générer un code de salle
+function generateRoomCode() {
+  return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+// Trouver un match dans la file d'attente
+function findMatch(playerId, gameMode) {
+  const compatiblePlayers = matchmakingQueue.filter(p => 
+    p.socketId !== playerId && p.gameMode === gameMode
+  );
+  
+  if (compatiblePlayers.length > 0) {
+    return compatiblePlayers[0];
+  }
+  return null;
+}
+
+// Envoyer une notification à tous les joueurs connectés
+function broadcastNotification(notification) {
+  io.emit('match_invitation', notification);
+}
+
 io.on('connection', (socket) => {
   console.log('Nouveau client connecté:', socket.id, 'Transport:', socket.conn.transport.name);
   
@@ -448,6 +474,210 @@ io.on('connection', (socket) => {
   socket.on('test', (data) => {
     console.log(`[TEST] Reçu:`, data);
     socket.emit('testResponse', { received: true, message: 'Serveur a bien reçu' });
+  });
+
+  // ===== ÉVÉNEMENTS MATCHMAKING =====
+  
+  // Enregistrement du joueur pour le matchmaking
+  socket.on('register_player', (data) => {
+    console.log(`[MATCHMAKING] Joueur enregistré: ${data.username} (${data.userId})`);
+    const player = {
+      socketId: socket.id,
+      playerId: data.userId,
+      username: data.username,
+      connectedAt: Date.now()
+    };
+    
+    players.set(socket.id, player);
+    socket.emit('player_registered', { success: true });
+  });
+
+  // Recherche de match
+  socket.on('find_match', (data) => {
+    console.log(`[MATCHMAKING] Recherche de match pour ${data.username}`);
+    
+    // Vérifier si le joueur est déjà dans la file
+    const existingIndex = matchmakingQueue.findIndex(p => p.socketId === socket.id);
+    if (existingIndex !== -1) {
+      socket.emit('match_error', { message: 'Déjà dans la file d\'attente' });
+      return;
+    }
+    
+    // Ajouter le joueur à la file d'attente
+    const queuePlayer = {
+      socketId: socket.id,
+      playerId: data.userId,
+      username: data.username,
+      gameMode: data.gameMode || 'ranked',
+      addedAt: Date.now()
+    };
+    
+    matchmakingQueue.push(queuePlayer);
+    
+    // Chercher un match
+    const match = findMatch(queuePlayer.playerId, data.gameMode || 'ranked');
+    
+    if (match) {
+      // Match trouvé ! Créer une salle automatiquement
+      const roomId = generateRoomCode();
+      
+      // Retirer les joueurs de la file
+      const queueIndex1 = matchmakingQueue.findIndex(p => p.socketId === socket.id);
+      const queueIndex2 = matchmakingQueue.findIndex(p => p.socketId === match.socketId);
+      
+      if (queueIndex1 !== -1) matchmakingQueue.splice(queueIndex1, 1);
+      if (queueIndex2 !== -1) matchmakingQueue.splice(queueIndex2, 1);
+      
+      // Créer la salle avec les deux joueurs
+      const room = {
+        id: roomId,
+        host: socket.id,
+        players: [
+          {
+            id: socket.id,
+            isHost: true,
+            ready: false,
+            name: queuePlayer.username
+          },
+          {
+            id: match.socketId,
+            isHost: false,
+            ready: false,
+            name: match.username
+          }
+        ],
+        gameState: null,
+        createdAt: Date.now(),
+        isMatchmaking: true
+      };
+      
+      setRoom(roomId, room);
+      
+      // Faire rejoindre les joueurs à la salle
+      socket.join(roomId);
+      const matchSocket = io.sockets.sockets.get(match.socketId);
+      if (matchSocket) {
+        matchSocket.join(roomId);
+      }
+      
+      // Notifier les deux joueurs
+      socket.emit('match_found', {
+        roomId: roomId,
+        opponent: match.username,
+        gameMode: queuePlayer.gameMode
+      });
+      
+      if (matchSocket) {
+        matchSocket.emit('match_found', {
+          roomId: roomId,
+          opponent: queuePlayer.username,
+          gameMode: queuePlayer.gameMode
+        });
+      }
+      
+      console.log(`[MATCHMAKING] Match trouvé: ${queuePlayer.username} vs ${match.username} (Salle: ${roomId})`);
+    } else {
+      // Pas de match trouvé, attendre
+      socket.emit('searching', { message: 'Recherche en cours...' });
+      console.log(`[MATCHMAKING] ${data.username} ajouté à la file d'attente (${matchmakingQueue.length} joueurs)`);
+    }
+  });
+
+  // Annuler la recherche
+  socket.on('cancel_matchmaking', () => {
+    const index = matchmakingQueue.findIndex(p => p.socketId === socket.id);
+    if (index !== -1) {
+      matchmakingQueue.splice(index, 1);
+      socket.emit('matchmaking_cancelled', { message: 'Recherche annulée' });
+      console.log(`[MATCHMAKING] Joueur ${socket.id} a quitté la file d'attente`);
+    }
+  });
+
+  // Créer une salle privée
+  socket.on('create_room', (data) => {
+    console.log(`[MATCHMAKING] Création salle privée par ${data.username}`);
+    
+    const roomId = generateRoomCode();
+    const room = {
+      id: roomId,
+      name: data.roomName || `Salle de ${data.username}`,
+      host: socket.id,
+      creator: { socketId: socket.id, username: data.username },
+      players: [{
+        id: socket.id,
+        isHost: true,
+        ready: false,
+        name: data.username
+      }],
+      isPrivate: true,
+      isMatchmaking: false,
+      createdAt: Date.now()
+    };
+    
+    setRoom(roomId, room);
+    socket.join(roomId);
+    
+    socket.emit('room_created', {
+      roomId: roomId,
+      roomName: room.name
+    });
+    
+    console.log(`[MATCHMAKING] Salle privée créée: ${roomId} par ${data.username}`);
+  });
+
+  // Rejoindre une salle privée
+  socket.on('join_room', (data) => {
+    console.log(`[MATCHMAKING] Tentative rejoindre salle ${data.roomId} par ${data.username}`);
+    
+    getRoom(data.roomId).then(room => {
+      if (!room) {
+        socket.emit('join_error', { message: 'Salle introuvable' });
+        return;
+      }
+      
+      if (room.players.length >= 2) {
+        socket.emit('join_error', { message: 'Salle pleine' });
+        return;
+      }
+      
+      // Ajouter le joueur à la salle
+      room.players.push({
+        id: socket.id,
+        isHost: false,
+        ready: false,
+        name: data.username
+      });
+      
+      room.status = 'ready';
+      setRoom(data.roomId, room);
+      socket.join(data.roomId);
+      
+      // Notifier tous les joueurs de la salle
+      room.players.forEach(p => {
+        const playerSocket = io.sockets.sockets.get(p.socketId);
+        if (playerSocket) {
+          playerSocket.emit('room_joined', {
+            roomId: data.roomId,
+            roomName: room.name,
+            players: room.players.map(pl => pl.username)
+          });
+        }
+      });
+      
+      console.log(`[MATCHMAKING] ${data.username} a rejoint la salle ${data.roomId}`);
+    });
+  });
+
+  // Accepter une invitation
+  socket.on('accept_invitation', (data) => {
+    console.log(`[MATCHMAKING] Invitation acceptée pour la salle ${data.roomId}`);
+    socket.emit('invitation_accepted', { roomId: data.roomId });
+  });
+
+  // Refuser une invitation
+  socket.on('decline_invitation', (data) => {
+    console.log(`[MATCHMAKING] Invitation refusée pour la salle ${data.roomId}`);
+    socket.emit('invitation_declined', { roomId: data.roomId });
   });
 
   // Démarrer la partie (manquant)
@@ -590,8 +820,74 @@ io.on('connection', (socket) => {
   });
 
   // Jouer une carte
-  socket.on('playCard', ({ roomId, card, isPlayer }) => {
-    socket.to(roomId).emit('opponentPlayedCard', { card, isPlayer });
+  socket.on('playCard', async ({ roomId, card, playerId }) => {
+    console.log(`[PLAYCARD] ===== CARTE JOUÉE =====`);
+    console.log(`[PLAYCARD] RoomID: ${roomId}`);
+    console.log(`[PLAYCARD] Card: ${card.name} (Type: ${card.type})`);
+    console.log(`[PLAYCARD] PlayerID: ${playerId}`);
+    console.log(`[PLAYCARD] Socket ID: ${socket.id}`);
+    
+    try {
+      const room = await getRoom(roomId);
+      if (!room) {
+        console.log(`[PLAYCARD] Room ${roomId} non trouvée`);
+        return;
+      }
+      
+      if (!room.gameState) {
+        console.log(`[PLAYCARD] GameState non initialisé`);
+        return;
+      }
+      
+      // Mettre à jour le gameState du joueur
+      const playerState = room.gameState.players[playerId];
+      if (!playerState) {
+        console.log(`[PLAYCARD] Joueur ${playerId} non trouvé dans le gameState`);
+        return;
+      }
+      
+      // Retirer la carte de la main
+      playerState.hand = playerState.hand.filter(c => c.deckId !== card.deckId);
+      
+      // Ajouter la carte selon son type
+      if (card.type === 'creature') {
+        playerState.field.push({ ...card, currentDefense: card.defense });
+        console.log(`[PLAYCARD] Créature ${card.name} ajoutée au terrain`);
+        
+        // Déduire le mana
+        playerState.mana = Math.max(0, playerState.mana - card.cost);
+        console.log(`[PLAYCARD] Mana déduit: -${card.cost}, nouveau mana: ${playerState.mana}`);
+        
+      } else if (card.type === 'land') {
+        playerState.lands.push({ ...card, tapped: false });
+        playerState.playedLand = true;
+        console.log(`[PLAYCARD] Terrain ${card.name} ajouté`);
+        
+      } else if (card.type === 'sorcery') {
+        playerState.graveyard.push(card);
+        console.log(`[PLAYCARD] Sort ${card.name} joué`);
+        
+        // Déduire le mana
+        playerState.mana = Math.max(0, playerState.mana - card.cost);
+        console.log(`[PLAYCARD] Mana déduit: -${card.cost}, nouveau mana: ${playerState.mana}`);
+      }
+      
+      // Sauvegarder le gameState mis à jour
+      await saveRoom(roomId, room);
+      
+      // Diffuser le gameState mis à jour à tous les joueurs
+      io.to(roomId).emit('gameUpdate', { 
+        gameState: room.gameState,
+        playerId: playerId,
+        action: 'playCard',
+        card: card
+      });
+      
+      console.log(`[PLAYCARD] GameState mis à jour et diffusé`);
+      
+    } catch (error) {
+      console.error(`[PLAYCARD] Erreur:`, error);
+    }
   });
 
   // Chat
@@ -710,6 +1006,14 @@ io.on('connection', (socket) => {
         room.gameState.players[nextPlayerId].mana = lands.reduce((total, land) => total + (land.mana || 1), 0);
         room.gameState.players[nextPlayerId].maxMana = room.gameState.players[nextPlayerId].mana;
         room.gameState.players[nextPlayerId].attackedCreatures = []; // Réinitialiser les créatures qui ont attaqué
+        room.gameState.players[nextPlayerId].playedLand = false; // Réinitialiser: peut jouer un terrain ce tour
+        
+        // Dé-tapper les terrains
+        room.gameState.players[nextPlayerId].lands = lands.map(land => ({ ...land, tapped: false }));
+        
+        console.log(`[END TURN] Mana réinitialisé: ${room.gameState.players[nextPlayerId].mana}`);
+        console.log(`[END TURN] playedLand réinitialisé: false`);
+        console.log(`[END TURN] Terrains dé-tappés: ${room.gameState.players[nextPlayerId].lands.length}`);
       }
       
       await setRoom(roomId, room);
